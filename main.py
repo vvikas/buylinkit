@@ -3,7 +3,7 @@ import argparse
 import os
 
 from sites import blinkit, zepto, instamart
-from sites.session import BrowserSession, needs_login, needs_location, auto_fill_phone
+from sites.session import BrowserSession, needs_login, needs_location
 from llm import extract_products, WaitUser
 from display import show_results, show_cart_options, console
 
@@ -183,52 +183,45 @@ async def _close_all(sessions: dict[str, BrowserSession]):
 
 async def login_mode(sites: list[str]):
     """
-    Open each site's browser one at a time, auto-fill phone from .env,
-    wait for user to enter OTP, then save the session and move on.
-    Run this once per machine before using ./run.sh normally.
+    Open each site one at a time. User logs in + sets location manually.
+    The persistent browser profile saves the session for future runs.
     """
-    phone = os.getenv("PHONE_NUMBER", "").strip()
-    if not phone:
-        console.print("\n[yellow]⚠ PHONE_NUMBER not set in .env — you'll log in manually.[/yellow]")
-        console.print("[dim]Add PHONE_NUMBER=10digitnumber to .env to auto-fill next time.[/dim]\n")
-
     for s in sites:
         label = SITE_CONFIG[s]["label"]
         mod   = SITE_CONFIG[s]["mod"]
         cfg   = SITE_CONFIG[s]
 
-        console.print(f"\n[bold cyan]──────── Logging into {label} ────────[/bold cyan]")
+        console.print(f"\n[bold cyan]──────── {label} ────────[/bold cyan]")
+        console.print(f"   Opening {label} — log in and set your delivery location.")
 
         session = BrowserSession(s, cfg["x"], cfg["y"], BROWSER_W, BROWSER_H)
         await session.start()
         page = session.page
 
-        # Navigate to start URL
         await page.goto(mod.START_URL, timeout=30000)
         await page.wait_for_load_state("domcontentloaded", timeout=20000)
-        await page.wait_for_timeout(2000)
-
-        # Run site-specific login sequence
-        if phone and hasattr(mod, "login_sequence"):
-            console.print(f"   Auto-filling phone for {label}…")
-            ok = await mod.login_sequence(page, phone)
-            if ok:
-                masked = phone[:2] + "****" + phone[-2:]
-                console.print(f"   📱 OTP sent to {masked}.")
-            else:
-                console.print(f"   [yellow]Could not auto-fill — log in manually in the browser.[/yellow]")
-        else:
-            console.print(f"   Log in manually in the [bold]{label}[/bold] browser window.")
 
         try:
-            input(f"   ↩  Press Enter once you're logged into {label}… ")
+            input(f"   ↩  Press Enter once logged in + location set for {label}… ")
         except EOFError:
             pass
 
-        await session.close()
-        console.print(f"   [green]✓ {label} session saved.[/green]")
+        # Verify — browser may have been closed by user, handle gracefully
+        try:
+            text = await page.inner_text("body")
+            url  = page.url
+            if needs_login(text, label, url):
+                console.print(f"   [yellow]⚠ Still looks like {label} is not logged in.[/yellow]")
+            elif needs_location(text, label):
+                console.print(f"   [yellow]⚠ Location still not set for {label}.[/yellow]")
+            else:
+                console.print(f"   [green]✓ {label} ready.[/green]")
+        except Exception:
+            console.print(f"   [yellow]⚠ Browser was closed — session may not be saved. Run again.[/yellow]")
 
-    console.print("\n[bold green]✓ Login complete. Run ./run.sh 'your query' to start shopping.[/bold green]\n")
+        await session.close()
+
+    console.print("\n[bold green]✓ Done. Run ./run.sh 'your query' to start shopping.[/bold green]\n")
 
 
 def main():
