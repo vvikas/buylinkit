@@ -9,11 +9,14 @@ from display import show_results, show_cart_options, console
 ALL_SITES = ["blinkit", "zepto", "instamart"]
 
 # Each site: module, display label, browser window position (x, y)
+# Windows sit on the right half of a 1280×832 logical screen (Retina 2560×1664).
+# 660 + 600 = 1260 < 1280  ✓   30 + 720 = 750 < 832  ✓
 SITE_CONFIG = {
-    "blinkit":   {"mod": blinkit,   "label": "Blinkit",   "x": 700, "y":  0},
-    "zepto":     {"mod": zepto,     "label": "Zepto",     "x": 730, "y": 25},
-    "instamart": {"mod": instamart, "label": "Instamart", "x": 760, "y": 50},
+    "blinkit":   {"mod": blinkit,   "label": "Blinkit",   "x": 660, "y": 30},
+    "zepto":     {"mod": zepto,     "label": "Zepto",     "x": 670, "y": 35},
+    "instamart": {"mod": instamart, "label": "Instamart", "x": 680, "y": 40},
 }
+BROWSER_W, BROWSER_H = 600, 720   # fits right half of screen, terminal stays visible
 
 
 async def run(query: str, sites: list[str]):
@@ -25,7 +28,7 @@ async def run(query: str, sites: list[str]):
     sessions: dict[str, BrowserSession] = {}
     for s in sites:
         cfg     = SITE_CONFIG[s]
-        session = BrowserSession(s, cfg["x"], cfg["y"])
+        session = BrowserSession(s, cfg["x"], cfg["y"], BROWSER_W, BROWSER_H)
         await session.start()
         sessions[s] = session
 
