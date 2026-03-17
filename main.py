@@ -4,7 +4,7 @@ import os
 
 from sites import blinkit, zepto, instamart
 from sites.session import BrowserSession, needs_login, needs_location, auto_fill_phone
-from llm import extract_products
+from llm import extract_products, WaitUser
 from display import show_results, show_cart_options, console
 
 ALL_SITES = ["blinkit", "zepto", "instamart"]
@@ -34,10 +34,14 @@ async def run(query: str, sites: list[str]):
 
     # ── 2. Search all sites in parallel (fast path when already logged in) ───
     async def _search_raw(s: str) -> str:
-        """Navigate to search URL and return raw page text — no prompting."""
+        """Navigate from START_URL using LLM — no prompting."""
         mod = SITE_CONFIG[s]["mod"]
         try:
             return await mod.search_raw(sessions[s].page, query)
+        except WaitUser as wu:
+            # LLM hit a user-prompt during search (rare) — return signal for
+            # the sequential loop below to handle
+            return f"WAITUSER: {wu}"
         except Exception as e:
             return f"ERROR: {e}"
 
@@ -56,10 +60,10 @@ async def run(query: str, sites: list[str]):
         if text.startswith("ERROR"):
             continue
 
-        # Login wall?
-        if needs_login(text, label):
+        # Login wall? — check URL first, then page text
+        if needs_login(text, label, page.url):
             console.print(f"\n[bold red]🔐 {label}:[/bold red] Not logged in.")
-            filled = await auto_fill_phone(page)
+            filled = await auto_fill_phone(page, label)
             if filled:
                 import os
                 phone = os.getenv("PHONE_NUMBER", "")

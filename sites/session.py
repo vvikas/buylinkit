@@ -30,7 +30,7 @@ class BrowserSession:
     """
 
     def __init__(self, site_key: str, x: int, y: int,
-                 width: int = 720, height: int = 760):
+                 width: int = 600, height: int = 720):
         self.site_key  = site_key
         self._profile  = str(PROFILE_DIR / site_key)
         self._x        = x
@@ -91,8 +91,12 @@ class BrowserSession:
 # Detection helpers — pure functions, no prompting (main.py handles that)
 # ---------------------------------------------------------------------------
 
-def needs_login(page_text: str, site: str) -> bool:
-    """True if the page is showing a login wall instead of search results."""
+def needs_login(page_text: str, site: str, url: str = "") -> bool:
+    """True if the page is a login wall — checks URL first (most reliable)."""
+    # URL redirect is the strongest signal
+    url_lower = url.lower()
+    if any(x in url_lower for x in ["login", "signin", "sign-in", "/auth"]):
+        return True
     text_lower = page_text.lower()[:800]
     signals    = _LOGIN_SIGNALS.get(site, [])
     has_login  = any(s in text_lower for s in signals)
@@ -133,18 +137,32 @@ _OTP_BTN_SELECTORS = [
 ]
 
 
-async def auto_fill_phone(page: Page) -> bool:
+async def auto_fill_phone(page: Page, site: str = "") -> bool:
     """
-    Read PHONE_NUMBER from env, fill the login form, and click the OTP button.
-    Returns True if the phone was filled and OTP was triggered.
-    The caller should then wait for the user to enter the OTP in the browser.
+    1. Use LLM to click the Login/Sign-in button (opens login form if hidden).
+    2. Fill PHONE_NUMBER from env into the phone input.
+    3. Click the OTP button / press Enter.
+    Returns True if phone was filled and OTP triggered.
     """
     phone = os.getenv("PHONE_NUMBER", "").strip()
     if not phone:
         return False
 
+    # Step 1 — LLM navigates to the login form (click Login button if needed)
     try:
-        # Find visible phone input
+        from llm import act
+        await act(
+            page,
+            goal="Find and click the Login or Sign In button to open the phone number login form.",
+            site=site or "the site",
+            max_steps=4,
+        )
+        await page.wait_for_timeout(1500)
+    except Exception:
+        pass  # If login form is already visible or LLM gave up, continue anyway
+
+    try:
+        # Step 2 — find visible phone input
         phone_input = None
         for sel in _PHONE_SELECTORS:
             loc = page.locator(sel).first
@@ -160,10 +178,10 @@ async def auto_fill_phone(page: Page) -> bool:
 
         await phone_input.click()
         await phone_input.fill("")
-        await phone_input.type(phone, delay=40)   # realistic typing speed
+        await phone_input.type(phone, delay=40)
         await page.wait_for_timeout(400)
 
-        # Click the OTP button
+        # Step 3 — click OTP button
         for sel in _OTP_BTN_SELECTORS:
             loc = page.locator(sel).first
             try:
@@ -173,7 +191,7 @@ async def auto_fill_phone(page: Page) -> bool:
             except Exception:
                 continue
 
-        # Fallback: submit via Enter
+        # Fallback: Enter key
         await phone_input.press("Enter")
         return True
 
