@@ -80,18 +80,20 @@ If a site stops recognizing your session later:
 Terminal                          Browser (right side of screen)
 ────────────────────────────────  ──────────────────────────────
 $ ./run.sh 'chocolate icecream'
-Searching on Blinkit, Zepto…      [3 windows open on right]
+Searching on Blinkit, Zepto…      [2 windows open on right half]
 Extracting prices…
 
 Results for: chocolate icecream
-  #   Product          Blinkit  Zepto  Instamart
-  b1  NIC Choco Chips  ₹322     —      —
-  b2  Amul Brownie     ₹210     —      —
-  z1  Kwality Walls    ₹35      ₹34    —        ← Zepto cheapest
+  #   Product          Blinkit  Zepto
+  b1  NIC Choco Chips  ₹322     —
+  b2  Kwality Walls    ₹37      —
+  z1  Kwality Walls    —        ₹34    ← Zepto cheapest
+
+Add to cart (or Enter to skip): b2
+💡 Zepto has it cheaper: ₹34 (z1) — Continue? [y/n]: n
 
 Add to cart (or Enter to skip): z1
-                                  [Blinkit+Instamart windows close]
-💡 Blinkit has it cheaper: ₹35 (b2) — Continue? [y/n]: y
+                                  [Blinkit window closes]
                                   [ADD clicked on Zepto]
                                   [cart page opens]
 ✓ Added to cart! Complete your
