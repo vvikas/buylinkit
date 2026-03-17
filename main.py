@@ -50,40 +50,23 @@ async def run(query: str, sites: list[str]):
     )
     texts: dict[str, str] = dict(zip(sites, raw_texts))
 
-    # ── 3. Fix login / location issues sequentially (stdin is single-threaded)
+    # ── 3. Handle location issues (login is handled by --login mode) ──────────
     for s in sites:
         label = SITE_CONFIG[s]["label"]
         text  = texts[s]
         page  = sessions[s].page
-        mod   = SITE_CONFIG[s]["mod"]
 
-        if text.startswith("ERROR"):
+        if text.startswith("ERROR") or text.startswith("WAITUSER"):
             continue
 
-        # Login wall? — check URL first, then page text
+        # Not logged in → tell user to run --login first
         if needs_login(text, label, page.url):
-            console.print(f"\n[bold red]🔐 {label}:[/bold red] Not logged in.")
-            filled = await auto_fill_phone(page, label)
-            if filled:
-                import os
-                phone = os.getenv("PHONE_NUMBER", "")
-                masked = phone[:2] + "****" + phone[-2:] if len(phone) >= 4 else "your number"
-                console.print(f"   📱 Phone number filled ({masked}) — enter the OTP in the browser.")
-            else:
-                console.print(f"   Log in inside the [bold]{label}[/bold] browser window.")
-                if not os.getenv("PHONE_NUMBER"):
-                    console.print("   [dim]Tip: add PHONE_NUMBER=10digitnumber to .env to auto-fill next time.[/dim]")
-            try:
-                input("   ↩  Press Enter once you're logged in… ")
-            except EOFError:
-                pass
-            try:
-                await page.wait_for_load_state("domcontentloaded", timeout=20000)
-                await page.wait_for_timeout(3000)
-                texts[s] = await mod.search_raw(page, query)
-                text = texts[s]
-            except Exception:
-                pass
+            console.print(
+                f"\n[bold red]🔐 {label}:[/bold red] Not logged in. "
+                f"Run [bold]./run.sh --login --sites {s}[/bold] first."
+            )
+            texts[s] = "ERROR: not logged in"
+            continue
 
         # Location not set?
         if needs_location(text, label):
@@ -196,6 +179,58 @@ async def _close_all(sessions: dict[str, BrowserSession]):
         await session.close()
 
 
+# ── Dedicated login mode ───────────────────────────────────────────────────
+
+async def login_mode(sites: list[str]):
+    """
+    Open each site's browser one at a time, auto-fill phone from .env,
+    wait for user to enter OTP, then save the session and move on.
+    Run this once per machine before using ./run.sh normally.
+    """
+    phone = os.getenv("PHONE_NUMBER", "").strip()
+    if not phone:
+        console.print("\n[yellow]⚠ PHONE_NUMBER not set in .env — you'll log in manually.[/yellow]")
+        console.print("[dim]Add PHONE_NUMBER=10digitnumber to .env to auto-fill next time.[/dim]\n")
+
+    for s in sites:
+        label = SITE_CONFIG[s]["label"]
+        mod   = SITE_CONFIG[s]["mod"]
+        cfg   = SITE_CONFIG[s]
+
+        console.print(f"\n[bold cyan]──────── Logging into {label} ────────[/bold cyan]")
+
+        session = BrowserSession(s, cfg["x"], cfg["y"], BROWSER_W, BROWSER_H)
+        await session.start()
+        page = session.page
+
+        # Navigate to start URL
+        await page.goto(mod.START_URL, timeout=30000)
+        await page.wait_for_load_state("domcontentloaded", timeout=20000)
+        await page.wait_for_timeout(2000)
+
+        # Run site-specific login sequence
+        if phone and hasattr(mod, "login_sequence"):
+            console.print(f"   Auto-filling phone for {label}…")
+            ok = await mod.login_sequence(page, phone)
+            if ok:
+                masked = phone[:2] + "****" + phone[-2:]
+                console.print(f"   📱 OTP sent to {masked}.")
+            else:
+                console.print(f"   [yellow]Could not auto-fill — log in manually in the browser.[/yellow]")
+        else:
+            console.print(f"   Log in manually in the [bold]{label}[/bold] browser window.")
+
+        try:
+            input(f"   ↩  Press Enter once you're logged into {label}… ")
+        except EOFError:
+            pass
+
+        await session.close()
+        console.print(f"   [green]✓ {label} session saved.[/green]")
+
+    console.print("\n[bold green]✓ Login complete. Run ./run.sh 'your query' to start shopping.[/bold green]\n")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Compare grocery prices on Blinkit, Zepto, Instamart"
@@ -204,9 +239,17 @@ def main():
     parser.add_argument(
         "--sites", nargs="+", choices=ALL_SITES, default=ALL_SITES,
         metavar="SITE",
-        help=f"Sites to search. Options: {', '.join(ALL_SITES)}",
+        help=f"Sites to search/login. Options: {', '.join(ALL_SITES)}",
+    )
+    parser.add_argument(
+        "--login", action="store_true",
+        help="Run the login flow for each site (do this once per machine).",
     )
     args = parser.parse_args()
+
+    if args.login:
+        asyncio.run(login_mode(args.sites))
+        return
 
     query = " ".join(args.query).strip()
     if not query:
