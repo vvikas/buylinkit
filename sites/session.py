@@ -3,6 +3,7 @@ BrowserSession — owns the playwright + context lifecycle for one site.
 All site modules use this to open/close their browser; main.py keeps
 sessions alive across search → add-to-cart so windows never reopen.
 """
+import os
 from pathlib import Path
 from playwright.async_api import Page
 
@@ -40,6 +41,14 @@ class BrowserSession:
         self._ctx      = None
         self._page     = None
 
+    # Real Chrome 124 UA — prevents sites (especially Swiggy) from detecting
+    # Playwright's Chromium as a bot.
+    _USER_AGENT = (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    )
+
     async def start(self) -> Page:
         from playwright.async_api import async_playwright
         Path(self._profile).mkdir(parents=True, exist_ok=True)
@@ -47,12 +56,18 @@ class BrowserSession:
         self._ctx = await self._pw.chromium.launch_persistent_context(
             self._profile,
             headless=False,
+            user_agent=self._USER_AGENT,
             args=[
                 f"--window-size={self._width},{self._height}",
                 f"--window-position={self._x},{self._y}",
+                "--disable-blink-features=AutomationControlled",  # hides navigator.webdriver
             ],
         )
         self._page = self._ctx.pages[0] if self._ctx.pages else await self._ctx.new_page()
+        # Remove the webdriver property that sites check for bot detection
+        await self._ctx.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        )
         return self._page
 
     @property
@@ -92,6 +107,78 @@ def needs_location(page_text: str, site: str) -> bool:
     has_signal = any(s in text_lower[:500] for s in signals)
     has_prices = "₹" in text_lower[:2000]
     return has_signal and not has_prices
+
+
+# ---------------------------------------------------------------------------
+# Auto-login: fill phone number and trigger OTP
+# ---------------------------------------------------------------------------
+
+# Ordered list of selectors to try for the phone input field
+_PHONE_SELECTORS = [
+    'input[type="tel"]',
+    'input[placeholder*="mobile" i]',
+    'input[placeholder*="phone" i]',
+    'input[placeholder*="number" i]',
+    'input[name*="mobile" i]',
+    'input[name*="phone" i]',
+]
+
+# Ordered list of selectors to try for the "send OTP" button
+_OTP_BTN_SELECTORS = [
+    'button:has-text("Get OTP")',
+    'button:has-text("Send OTP")',
+    'button:has-text("Request OTP")',
+    'button:has-text("Continue")',
+    'button[type="submit"]',
+]
+
+
+async def auto_fill_phone(page: Page) -> bool:
+    """
+    Read PHONE_NUMBER from env, fill the login form, and click the OTP button.
+    Returns True if the phone was filled and OTP was triggered.
+    The caller should then wait for the user to enter the OTP in the browser.
+    """
+    phone = os.getenv("PHONE_NUMBER", "").strip()
+    if not phone:
+        return False
+
+    try:
+        # Find visible phone input
+        phone_input = None
+        for sel in _PHONE_SELECTORS:
+            loc = page.locator(sel).first
+            try:
+                if await loc.is_visible(timeout=2000):
+                    phone_input = loc
+                    break
+            except Exception:
+                continue
+
+        if phone_input is None:
+            return False
+
+        await phone_input.click()
+        await phone_input.fill("")
+        await phone_input.type(phone, delay=40)   # realistic typing speed
+        await page.wait_for_timeout(400)
+
+        # Click the OTP button
+        for sel in _OTP_BTN_SELECTORS:
+            loc = page.locator(sel).first
+            try:
+                if await loc.is_visible(timeout=2000):
+                    await loc.click()
+                    return True
+            except Exception:
+                continue
+
+        # Fallback: submit via Enter
+        await phone_input.press("Enter")
+        return True
+
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------

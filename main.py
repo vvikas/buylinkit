@@ -1,8 +1,9 @@
 import asyncio
 import argparse
+import os
 
 from sites import blinkit, zepto, instamart
-from sites.session import BrowserSession, needs_login, needs_location
+from sites.session import BrowserSession, needs_login, needs_location, auto_fill_phone
 from llm import extract_products
 from display import show_results, show_cart_options, console
 
@@ -58,15 +59,23 @@ async def run(query: str, sites: list[str]):
         # Login wall?
         if needs_login(text, label):
             console.print(f"\n[bold red]🔐 {label}:[/bold red] Not logged in.")
-            console.print(f"   Log in inside the [bold]{label}[/bold] browser window, then press Enter.")
+            filled = await auto_fill_phone(page)
+            if filled:
+                import os
+                phone = os.getenv("PHONE_NUMBER", "")
+                masked = phone[:2] + "****" + phone[-2:] if len(phone) >= 4 else "your number"
+                console.print(f"   📱 Phone number filled ({masked}) — enter the OTP in the browser.")
+            else:
+                console.print(f"   Log in inside the [bold]{label}[/bold] browser window.")
+                if not os.getenv("PHONE_NUMBER"):
+                    console.print("   [dim]Tip: add PHONE_NUMBER=10digitnumber to .env to auto-fill next time.[/dim]")
             try:
-                input("   ↩  Press Enter when done… ")
+                input("   ↩  Press Enter once you're logged in… ")
             except EOFError:
                 pass
             try:
                 await page.wait_for_load_state("domcontentloaded", timeout=20000)
                 await page.wait_for_timeout(3000)
-                # Re-run the search now that we're logged in
                 texts[s] = await mod.search_raw(page, query)
                 text = texts[s]
             except Exception:
