@@ -73,10 +73,11 @@ class BrowserSession:
 
 
 # ---------------------------------------------------------------------------
-# Location helper
+# Detection helpers — pure functions, no prompting (main.py handles that)
 # ---------------------------------------------------------------------------
 
-def _login_required(page_text: str, site: str) -> bool:
+def needs_login(page_text: str, site: str) -> bool:
+    """True if the page is showing a login wall instead of search results."""
     text_lower = page_text.lower()[:800]
     signals    = _LOGIN_SIGNALS.get(site, [])
     has_login  = any(s in text_lower for s in signals)
@@ -84,46 +85,13 @@ def _login_required(page_text: str, site: str) -> bool:
     return has_login and not has_prices
 
 
-def _location_missing(page_text: str, site: str) -> bool:
+def needs_location(page_text: str, site: str) -> bool:
+    """True if prices are absent because no delivery location is set."""
     text_lower = page_text.lower()
     signals    = _NO_LOCATION_SIGNALS.get(site, [])
-    preview    = text_lower[:500]
-    has_signal = any(s in preview for s in signals)
+    has_signal = any(s in text_lower[:500] for s in signals)
     has_prices = "₹" in text_lower[:2000]
     return has_signal and not has_prices
-
-
-async def ensure_location(page: Page, page_text: str, site: str) -> str:
-    # Check login first
-    if _login_required(page_text, site):
-        print(f"\n🔐 [{site}] Login required — please log in inside the browser window.")
-        print(f"   Tip: run  ./login.sh  once to set up all sites, then search normally.")
-        try:
-            input("   Press Enter once you're logged in… ")
-        except EOFError:
-            pass
-        try:
-            await page.wait_for_load_state("domcontentloaded", timeout=20000)
-            await page.wait_for_timeout(3000)
-            page_text = await page.inner_text("body")
-        except Exception:
-            pass
-
-    # Then check location
-    if _location_missing(page_text, site):
-        print(f"\n📍 [{site}] Location not set — set your delivery address in the browser.")
-        try:
-            input("   Press Enter once location is set… ")
-        except EOFError:
-            pass
-        try:
-            await page.wait_for_load_state("domcontentloaded", timeout=15000)
-            await page.wait_for_timeout(2000)
-            page_text = await page.inner_text("body")
-        except Exception:
-            pass
-
-    return page_text
 
 
 # ---------------------------------------------------------------------------
