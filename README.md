@@ -44,6 +44,25 @@ cp .env.example .env
 
 ---
 
+## First-time login (once per machine)
+
+Before searching, log in to each site and set your delivery location. The persistent browser profile saves everything permanently.
+
+```bash
+./login.sh                  # all 3 sites
+./login.sh blinkit          # one site only
+./login.sh blinkit zepto    # two sites
+```
+
+This opens each site's browser one at a time. Log in manually (phone + OTP), set your delivery address, then press Enter in the terminal. Done — you won't need to do this again.
+
+If a site stops recognizing your session later:
+```bash
+./login.sh blinkit          # re-login to that site only
+```
+
+---
+
 ## Usage
 
 ```bash
@@ -55,27 +74,26 @@ cp .env.example .env
 ./run.sh 'milk' --sites blinkit zepto
 ```
 
-**First run per site:** the browser will open and ask you to set your delivery location. Do it once — the profile remembers it.
-
 ### Workflow
 
 ```
 Terminal                          Browser (right side of screen)
 ────────────────────────────────  ──────────────────────────────
 $ ./run.sh 'chocolate icecream'
-Searching on Blinkit, Zepto…      [Blinkit opens] [Zepto opens]
+Searching on Blinkit, Zepto…      [3 windows open on right]
 Extracting prices…
-                                  [windows close after scraping]
-Results for: chocolate icecream
-  Product          Blinkit  Zepto  Best
-  NIC Choco Chips  ₹322     —      ← Blinkit
-  Amul Brownie     ₹210     —      ← Blinkit
-  Baskin Robbins   ₹80      —      ← Blinkit
-  Kwality Walls    ₹35      ₹34    ← Zepto   ✓ cheapest
 
-Add to cart: z1
-                                  [Zepto window stays open]
-                                  [ADD clicked, cart opens]
+Results for: chocolate icecream
+  #   Product          Blinkit  Zepto  Instamart
+  b1  NIC Choco Chips  ₹322     —      —
+  b2  Amul Brownie     ₹210     —      —
+  z1  Kwality Walls    ₹35      ₹34    —        ← Zepto cheapest
+
+Add to cart (or Enter to skip): z1
+                                  [Blinkit+Instamart windows close]
+💡 Blinkit has it cheaper: ₹35 (b2) — Continue? [y/n]: y
+                                  [ADD clicked on Zepto]
+                                  [cart page opens]
 ✓ Added to cart! Complete your
   order in the browser.
 Press Enter when done…
@@ -88,15 +106,16 @@ Press Enter when done…
 ```
 buylinkit/
   main.py           # CLI entry — orchestrates the full flow
-  llm.py            # Groq client — extracts products from raw page text
+  llm.py            # Groq client — price extraction + LLM cart navigation
   display.py        # Rich terminal table
   sites/
-    session.py      # BrowserSession class + click_add_button
+    session.py      # BrowserSession, do_search, click_add_button
     blinkit.py      # Blinkit scraper + cart
     zepto.py        # Zepto scraper + cart
     instamart.py    # Swiggy Instamart scraper + cart
   setup.sh          # One-time install (venv + playwright)
-  run.sh            # Run wrapper
+  login.sh          # Login helper (wraps: main.py --login)
+  run.sh            # Search wrapper (wraps: main.py)
   requirements.txt
 ```
 
