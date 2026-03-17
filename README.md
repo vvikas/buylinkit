@@ -23,7 +23,7 @@ BuyLinkit searches multiple 10-minute delivery services simultaneously, shows yo
 
 - macOS (uses persistent Chromium profiles)
 - Python 3.10+
-- A free [Groq API key](https://console.groq.com) — used for price extraction (Llama 3.3 70B)
+- A free [Groq API key](https://console.groq.com) — used for LLM agent decisions and price extraction
 
 ---
 
@@ -106,13 +106,18 @@ Press Enter when done…
 ```
 buylinkit/
   main.py           # CLI entry — orchestrates the full flow
-  llm.py            # Groq client — price extraction + LLM cart navigation
+  agent.py          # LLM browser agent — reads DOM text + site hints, decides actions
+  llm.py            # Groq client — price extraction from page text
   display.py        # Rich terminal table
   sites/
-    session.py      # BrowserSession, do_search, click_add_button
-    blinkit.py      # Blinkit scraper + cart
-    zepto.py        # Zepto scraper + cart
-    instamart.py    # Swiggy Instamart scraper + cart
+    session.py      # BrowserSession, login/location detection
+    blinkit.py      # Blinkit search + cart (uses agent.do())
+    zepto.py        # Zepto search + cart (uses agent.do())
+    instamart.py    # Instamart search + cart (uses agent.do())
+    hints/          # Static site profiles (.md) — UI layout per site
+      blinkit.md
+      zepto.md
+      instamart.md
   setup.sh          # One-time install (venv + playwright)
   login.sh          # Login helper (wraps: main.py --login)
   run.sh            # Search wrapper (wraps: main.py)
@@ -123,28 +128,39 @@ buylinkit/
 
 ## How it works
 
+BuyLinkit uses a **pure LLM agent** — no hardcoded CSS selectors, no JS DOM hacks, no screenshots at runtime. The agent reads DOM text + static site hints to decide actions.
+
 1. **Opens one persistent Chromium window per site** (positions them to the right so the terminal stays visible)
-2. **Searches all sites in parallel** — navigates to the search URL, waits for JS to render, grabs body text
-3. **Sends page text to Groq** (Llama 3.3 70B) — extracts structured `{name, price, unit, available}` per product
+2. **LLM agent searches all sites in parallel** — `agent.do()` reads page text, LLM decides actions (click, type, press Enter), Playwright executes
+3. **Sends page text to Groq** — extracts structured `{name, price, unit, available}` per product
 4. **Renders a Rich comparison table** in the terminal
-5. **On selection**: closes losing-site windows, clicks the Nth ADD button (by list position) on the still-open search-results page, navigates to cart
+5. **On selection**: closes other windows, agent clicks the Nth ADD button (by exact index) on the search results page, navigates to cart
 6. **Browser stays open** for you to review the cart and pay
+
+### Agent architecture
+
+Each site has a hint file (`sites/hints/{site}.md`) describing the UI layout — search bar behavior, product card structure, cart navigation. The agent reads DOM text + these hints, asks the LLM for one action at a time, and Playwright executes it. No vision model needed at runtime.
 
 ---
 
 ## Adding more sites
 
-Each site is a small module in `sites/` with two async functions:
+1. Create a site module in `sites/` with `search_raw()` and `add_to_cart()` — both use `agent.do()`:
 
 ```python
-async def search(page: Page, query: str) -> str:
-    # navigate + return page body text
+from agent import do
 
-async def add_to_cart(page: Page, product_name: str, product_index: int) -> bool:
-    # click ADD and navigate to cart
+async def search_raw(page, query):
+    await do(page, f"Search for '{query}'...", "mysite")
+    return await page.inner_text("body")
+
+async def add_to_cart(page, product_name, product_index=0):
+    await do(page, f'Click ADD at index {product_index}', "mysite", max_steps=2)
+    return True
 ```
 
-Add the module to `SITE_CONFIG` in `main.py` with a window position and you're done.
+2. Write a hint file at `sites/hints/mysite.md` describing the UI layout
+3. Add the module to `SITE_CONFIG` in `main.py` with a window position
 
 ---
 

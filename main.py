@@ -3,45 +3,60 @@ import argparse
 import os
 
 from sites import blinkit, zepto, instamart
-from sites.session import BrowserSession, needs_login, needs_location
-from llm import extract_products, WaitUser
+from sites.session import BrowserSession, needs_login, needs_location, _get_screen_size
+from llm import extract_products
 from display import show_results, show_cart_options, console
 
 ALL_SITES = ["blinkit", "zepto", "instamart"]
+DEFAULT_SITES = ["blinkit", "zepto"]
 
-# Windows sit on the right half of a 1280×832 logical screen (Retina 2560×1664).
-# 660 + 600 = 1260 < 1280  ✓   30 + 720 = 750 < 832  ✓
 SITE_CONFIG = {
-    "blinkit":   {"mod": blinkit,   "label": "Blinkit",   "x": 660, "y": 30},
-    "zepto":     {"mod": zepto,     "label": "Zepto",     "x": 670, "y": 35},
-    "instamart": {"mod": instamart, "label": "Instamart", "x": 680, "y": 40},
+    "blinkit":   {"mod": blinkit,   "label": "Blinkit"},
+    "zepto":     {"mod": zepto,     "label": "Zepto"},
+    "instamart": {"mod": instamart, "label": "Instamart"},
 }
-BROWSER_W, BROWSER_H = 600, 720
+
+
+_MENU_BAR_H     = 25   # macOS menu bar
+_BROWSER_CHROME = 90   # Chromium title bar + tabs + address bar
+
+
+
+def _browser_positions(n: int) -> list:
+    """Right half of screen, browsers stacked vertically, accounting for browser chrome."""
+    sw, sh = _get_screen_size()
+    x        = sw // 2
+    w        = sw // 2                          # exact half — avoids right-edge overflow
+    usable_h = sh - _MENU_BAR_H                # subtract macOS menu bar
+    slot_h   = usable_h // n
+    viewport_h = max(slot_h - _BROWSER_CHROME, 400)
+    return [
+        {
+            "position": (x, _MENU_BAR_H + i * slot_h),
+            "size": (w, viewport_h),
+        }
+        for i in range(n)
+    ]
 
 
 async def run(query: str, sites: list[str]):
     labels = [SITE_CONFIG[s]["label"] for s in sites]
-    console.print(f"\n[bold cyan]Searching '{query}' on {', '.join(labels)}…[/bold cyan]")
-    console.print("[dim]Browsers open on the right — keep this terminal visible.[/dim]\n")
+    console.print(f"\n[bold cyan]Searching '{query}' on {', '.join(labels)}…[/bold cyan]\n")
 
-    # ── 1. Open all browsers ──────────────────────────────────────────────────
+    # ── 1. Open all browsers tiled on the right half of the screen ───────────
     sessions: dict[str, BrowserSession] = {}
-    for s in sites:
-        cfg = SITE_CONFIG[s]
-        session = BrowserSession(s, cfg["x"], cfg["y"], BROWSER_W, BROWSER_H)
+    positions = _browser_positions(len(sites))
+    for i, s in enumerate(sites):
+        p = positions[i]
+        session = BrowserSession(s, position=p["position"], size=p["size"])
         await session.start()
         sessions[s] = session
 
     # ── 2. Search all sites in parallel (fast path when already logged in) ───
     async def _search_raw(s: str) -> str:
-        """Navigate from START_URL using LLM — no prompting."""
         mod = SITE_CONFIG[s]["mod"]
         try:
             return await mod.search_raw(sessions[s].page, query)
-        except WaitUser as wu:
-            # LLM hit a user-prompt during search (rare) — return signal for
-            # the sequential loop below to handle
-            return f"WAITUSER: {wu}"
         except Exception as e:
             return f"ERROR: {e}"
 
@@ -56,7 +71,7 @@ async def run(query: str, sites: list[str]):
         text  = texts[s]
         page  = sessions[s].page
 
-        if text.startswith("ERROR") or text.startswith("WAITUSER"):
+        if text.startswith("ERROR"):
             continue
 
         # Not logged in → tell user to run --login first
@@ -68,10 +83,11 @@ async def run(query: str, sites: list[str]):
             texts[s] = "ERROR: not logged in"
             continue
 
-        # Location not set?
+        # Location not set? Bring browser to front so user can set it
         if needs_location(text, label):
             console.print(f"\n[bold yellow]📍 {label}:[/bold yellow] Delivery location not set.")
-            console.print(f"   Set it in the [bold]{label}[/bold] browser window, then press Enter.")
+            await sessions[s].bring_to_front()
+            console.print(f"   Set your delivery location in the {label} browser, then press Enter.")
             try:
                 input("   ↩  Press Enter when done… ")
             except EOFError:
@@ -144,34 +160,45 @@ async def run(query: str, sites: list[str]):
             await _close_all(sessions)
             return
 
-    # ── 8. Close losing site windows ─────────────────────────────────────────
+    # ── 8. Close other site browsers ───────────────────────────────────────────
     chosen_key = matched["site"].lower()
     for s, session in sessions.items():
         if s != chosen_key:
             await session.close()
 
-    # ── 9. Add to cart on the already-open search-results page ───────────────
+    # ── 9. Add to cart (still minimized) ─────────────────────────────────────
     product = matched["product"]
     index   = matched["index"]
     console.print(
         f"\n[bold]Adding [cyan]{product['name']}[/cyan] to {matched['site']}…[/bold]"
     )
 
+    chosen_session = sessions[chosen_key]
     ok = await SITE_CONFIG[chosen_key]["mod"].add_to_cart(
-        sessions[chosen_key].page, product["name"], index
+        chosen_session.page, product["name"], index
     )
+
+    # ── 10. Navigate to cart and bring browser to front for checkout ─────────
+    cart_urls = {
+        "blinkit":   "https://blinkit.com/checkout",
+        "zepto":     "https://www.zepto.com/?cart=open",
+        "instamart": "https://www.swiggy.com/instamart/checkout",
+    }
+    cart_url = cart_urls.get(chosen_key, SITE_CONFIG[chosen_key]["mod"].START_URL)
+    await chosen_session.page.goto(cart_url, timeout=20000)
+    await chosen_session.page.wait_for_load_state("domcontentloaded", timeout=15000)
+    await chosen_session.bring_to_front()
 
     if ok:
         console.print("\n[bold green]✓ Added to cart![/bold green]  Complete your order in the browser.")
     else:
-        console.print("\n[yellow]⚠ Couldn't auto-click ADD — add it manually in the browser.[/yellow]")
+        console.print("\n[yellow]⚠ Couldn't auto-click ADD — try adding it manually in the browser.[/yellow]")
 
-    # ── 10. Keep browser open for payment ────────────────────────────────────
     try:
         input("\nPress Enter when you're done with your order… ")
     except EOFError:
         pass
-    await sessions[chosen_key].close()
+    await chosen_session.close()
 
 
 async def _close_all(sessions: dict[str, BrowserSession]):
@@ -189,12 +216,11 @@ async def login_mode(sites: list[str]):
     for s in sites:
         label = SITE_CONFIG[s]["label"]
         mod   = SITE_CONFIG[s]["mod"]
-        cfg   = SITE_CONFIG[s]
 
         console.print(f"\n[bold cyan]──────── {label} ────────[/bold cyan]")
         console.print(f"   Opening {label} — log in and set your delivery location.")
 
-        session = BrowserSession(s, cfg["x"], cfg["y"], BROWSER_W, BROWSER_H)
+        session = BrowserSession(s)
         await session.start()
         page = session.page
 
@@ -230,7 +256,7 @@ def main():
     )
     parser.add_argument("query", nargs="*", help="What to search for")
     parser.add_argument(
-        "--sites", nargs="+", choices=ALL_SITES, default=ALL_SITES,
+        "--sites", nargs="+", choices=ALL_SITES, default=DEFAULT_SITES,
         metavar="SITE",
         help=f"Sites to search/login. Options: {', '.join(ALL_SITES)}",
     )
