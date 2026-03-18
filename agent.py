@@ -210,8 +210,8 @@ async def do(page, goal: str, site: str, max_steps: int = 5) -> str:
             pass
 
         action = _decide(page_text, page.url, goal, site, history)
-        tag = json.dumps(action, ensure_ascii=False)
-        print(f"  [{site}] step {step+1}: {tag}")
+        if os.getenv("BUYLINKIT_VERBOSE"):
+            print(f"  [{site}] step {step+1}: {json.dumps(action, ensure_ascii=False)}")
 
         if action.get("done"):
             return "done"

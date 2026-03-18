@@ -80,14 +80,14 @@ If a site stops recognizing your session later:
 Terminal                          Browser (right side of screen)
 ────────────────────────────────  ──────────────────────────────
 $ ./run.sh 'chocolate icecream'
-Searching on Blinkit, Zepto…      [2 windows open on right half]
-Extracting prices…
+Searching 'chocolate icecream'…   [2 windows open on right half]
+  ✓ Blinkit
+  ✓ Zepto
 
 Results for: chocolate icecream
-  #   Product          Blinkit  Zepto
-  b1  NIC Choco Chips  ₹322     —
-  b2  Kwality Walls    ₹37      —
-  z1  Kwality Walls    —        ₹34    ← Zepto cheapest
+  Product          Unit    Blinkit    Zepto     Best
+  NIC Choco Chips  500 ml  ₹322 13m  —         ← Blinkit
+  Kwality Walls    100 ml  ₹37  13m  ₹34  8m   ← Zepto
 
 Add to cart (or Enter to skip): b2
 💡 Zepto has it cheaper: ₹34 (z1) — Continue? [y/n]: n
@@ -99,6 +99,11 @@ Add to cart (or Enter to skip): z1
 ✓ Added to cart! Complete your
   order in the browser.
 Press Enter when done…
+```
+
+To see agent debug steps (LLM decisions per page action):
+```bash
+BUYLINKIT_VERBOSE=1 ./run.sh 'milk'
 ```
 
 ---

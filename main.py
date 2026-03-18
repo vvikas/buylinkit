@@ -1,6 +1,7 @@
 import asyncio
 import argparse
 import os
+from difflib import SequenceMatcher
 
 from sites import blinkit, zepto, instamart
 from sites.session import BrowserSession, needs_login, needs_location, _get_screen_size
@@ -64,6 +65,13 @@ async def run(query: str, sites: list[str]):
         await asyncio.gather(*[_search_raw(s) for s in sites])
     )
     texts: dict[str, str] = dict(zip(sites, raw_texts))
+
+    for s in sites:
+        label = SITE_CONFIG[s]["label"]
+        ok = not texts[s].startswith("ERROR")
+        icon, color = ("✓", "green") if ok else ("✗", "red")
+        console.print(f"  [{color}]{icon} {label}[/{color}]")
+    console.print()
 
     # ── 3. Handle location issues (login is handled by --login mode) ──────────
     for s in sites:
@@ -138,13 +146,16 @@ async def run(query: str, sites: list[str]):
         return
 
     # ── 7. Warn if cheaper elsewhere ─────────────────────────────────────────
-    chosen_price    = matched["product"]["price"]
-    chosen_site     = matched["site"]
-    cheaper_alts    = [
+    def _name_similar(a: str, b: str) -> bool:
+        return SequenceMatcher(None, a.lower(), b.lower()).ratio() >= 0.65
+
+    chosen_price = matched["product"]["price"]
+    chosen_site  = matched["site"]
+    cheaper_alts = [
         o for o in options
         if o["site"] != chosen_site
         and o["product"]["price"] < chosen_price
-        and o["product"]["name"][:10].lower() == matched["product"]["name"][:10].lower()
+        and _name_similar(o["product"]["name"], matched["product"]["name"])
     ]
     if cheaper_alts:
         best = min(cheaper_alts, key=lambda o: o["product"]["price"])
